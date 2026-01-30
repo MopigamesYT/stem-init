@@ -1,0 +1,37 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo add-apt-repository ppa:epitech/ppa
+          sudo apt-get update
+          sudo apt-get install -y make clang libcriterion-dev epiclang banana-coding-style-checker
+
+      - name: Check coding style
+        run: |
+          make epiclang
+          banana-check-repo
+
+      - name: Build
+        run: make
+
+      - name: Check binary exists
+        run: test -f "$(make -s print-name)"
+
+      - name: Run tests
+        run: make test
+
+      - name: Clean
+        run: make fclean

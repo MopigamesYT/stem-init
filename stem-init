@@ -1,0 +1,70 @@
+#!/bin/bash
+
+set -e
+
+# Parse arguments
+FORCE=false
+POSITIONAL=()
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help)
+      echo "󰐗 stem-init — project scaffolding tool"
+      echo
+      echo "Usage: stem-init [options] [project_name]"
+      echo
+      echo "Options:"
+      echo "  -h, --help    Show this help message"
+      echo "  -f, --force   Override non-empty directory check"
+      echo
+      echo "If no project_name is given, the current directory name is used."
+      exit 0
+      ;;
+    -f|--force)
+      FORCE=true
+      ;;
+    *)
+      POSITIONAL+=("$arg")
+      ;;
+  esac
+done
+
+# Fail if directory is not empty (excluding .git)
+if [ "$FORCE" = false ] && find . -mindepth 1 -maxdepth 1 ! -name '.git' | read -r _; then
+  echo "󰅙 Error: directory is not empty (excluding .git)"
+  echo "       Please run this in an empty project folder."
+  echo "       Use --force to override."
+  exit 1
+fi
+
+# Project name
+if [ -n "${POSITIONAL[0]}" ]; then
+  PROJECT_NAME="${POSITIONAL[0]}"
+else
+  PROJECT_NAME="$(basename "$(pwd)")"
+fi
+
+ESCAPED_NAME=$(printf '%s\n' "$PROJECT_NAME" | sed 's/[\/&]/\\&/g')
+
+echo "󰐗 Initializing project: $PROJECT_NAME"
+
+# Copy template quietly
+rsync -a --exclude=.git --quiet $XDG_CONFIG_HOME/stem-init/ ./
+
+# Replace placeholders
+CURRENT_YEAR=$(date +%Y)
+
+grep -rl --binary-files=without-match "CURRENT_YEAR" . \
+  | xargs sed -i "s/CURRENT_YEAR/${CURRENT_YEAR}/g"
+
+grep -rl --binary-files=without-match "PROJECT_NAME" . \
+  | xargs sed -i "s/PROJECT_NAME/${ESCAPED_NAME}/g"
+
+echo "󰄬 Template applied successfully"
+
+echo
+echo "--------------------------------"
+
+make help || true
+
+echo
+tree
