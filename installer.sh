@@ -31,7 +31,7 @@ sudo -v || exit 1
 
 echo "  Copying templates to $CONFIG_DIR"
 mkdir -p "$CONFIG_DIR"
-cp -r stem/* "$CONFIG_DIR"
+cp -r stem/. "$CONFIG_DIR"
 
 echo "  Installing stem-init to /usr/bin/stem-init"
 sudo cp stem-init /usr/bin/stem-init

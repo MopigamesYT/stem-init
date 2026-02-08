@@ -5,7 +5,7 @@
 ## makefile
 ##
 
-NAME = PROJECT_NAME
+NAME = BINARY_NAME
 SRC = main.c
 
 CC = clang

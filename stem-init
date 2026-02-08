@@ -43,12 +43,31 @@ else
   PROJECT_NAME="$(basename "$(pwd)")"
 fi
 
-ESCAPED_NAME=$(printf '%s\n' "$PROJECT_NAME" | sed 's/[\/&]/\\&/g')
+# Ask for binary name (default: text between 6th and 7th dash, without trailing digits)
+# Count dashes to ensure we have enough fields
+DASH_COUNT=$(echo "$PROJECT_NAME" | tr -cd '-' | wc -c)
+if [ "$DASH_COUNT" -ge 6 ]; then
+  DEFAULT_BINARY=$(echo "$PROJECT_NAME" | cut -d'-' -f7 | sed 's/[0-9]*$//')
+else
+  DEFAULT_BINARY="$PROJECT_NAME"
+fi
+# Fallback to project name if extraction resulted in empty string
+if [ -z "$DEFAULT_BINARY" ]; then
+  DEFAULT_BINARY="$PROJECT_NAME"
+fi
+printf "Binary name (default: %s): " "$DEFAULT_BINARY"
+read -r BINARY_NAME
+if [ -z "$BINARY_NAME" ]; then
+  BINARY_NAME="$DEFAULT_BINARY"
+fi
 
-echo "󰐗 Initializing project: $PROJECT_NAME"
+ESCAPED_NAME=$(printf '%s\n' "$PROJECT_NAME" | sed 's/[\/&]/\\&/g')
+ESCAPED_BINARY=$(printf '%s\n' "$BINARY_NAME" | sed 's/[\/&]/\\&/g')
+
+echo "󰐗 Initializing project: $PROJECT_NAME (binary: $BINARY_NAME)"
 
 # Copy template quietly
-rsync -a --exclude=.git --quiet $XDG_CONFIG_HOME/stem-init/ ./
+rsync -a --exclude='/.git' --quiet "$XDG_CONFIG_HOME/stem-init/" ./
 
 # Replace placeholders
 CURRENT_YEAR=$(date +%Y)
@@ -59,6 +78,9 @@ grep -rl --binary-files=without-match "CURRENT_YEAR" . \
 grep -rl --binary-files=without-match "PROJECT_NAME" . \
   | xargs sed -i "s/PROJECT_NAME/${ESCAPED_NAME}/g"
 
+grep -rl --binary-files=without-match "BINARY_NAME" . \
+  | xargs sed -i "s/BINARY_NAME/${ESCAPED_BINARY}/g"
+
 echo "󰄬 Template applied successfully"
 
 echo
@@ -67,4 +89,4 @@ echo "--------------------------------"
 make help || true
 
 echo
-tree
+tree -a -I .git
