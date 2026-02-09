@@ -1,4 +1,4 @@
-name: Build
+name: CI
 
 on:
   push:
@@ -6,32 +6,76 @@ on:
     branches: [main]
 
 jobs:
-  build:
+  coding-style:
     runs-on: self-hosted
-
     steps:
-      - name: Checkout
+      - name: "[GITHUB] Checkout code from GitHub"
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: "[SETUP] Install dependencies"
         run: |
           sudo add-apt-repository ppa:epitech/ppa
           sudo apt-get update
-          sudo apt-get install -y make clang libcriterion-dev epiclang banana-coding-style-checker
+          sudo apt-get install -y make clang epiclang banana-coding-style-checker
 
-      - name: Check coding style
+      - name: "[STYLE] Check coding style"
         run: |
           make epiclang
           banana-check-repo
 
-      - name: Build
+  build:
+    runs-on: self-hosted
+    needs: coding-style
+    steps:
+      - name: "[GITHUB] Checkout code from GitHub"
+        uses: actions/checkout@v4
+
+      - name: "[SETUP] Install dependencies"
+        run: sudo apt-get update && sudo apt-get install -y make clang
+
+      - name: "[BUILD] Compile project"
         run: make
 
-      - name: Check binary exists
+      - name: "[CHECK] Verify binary exists"
         run: test -f "$(make -s print-name)"
 
-      - name: Run tests
+      - name: "[CLEAN] Teardown"
+        run: make fclean
+
+  tests:
+    runs-on: self-hosted
+    needs: build
+    steps:
+      - name: "[GITHUB] Checkout code from GitHub"
+        uses: actions/checkout@v4
+
+      - name: "[SETUP] Install dependencies"
+        run: sudo apt-get update && sudo apt-get install -y make clang libcriterion-dev
+
+      - name: "[BUILD] Compile project"
+        run: make
+
+      - name: "[TESTS] Run tests"
         run: make test
 
-      - name: Clean
+      - name: "[CLEAN] Teardown"
+        run: make fclean
+
+  grindme:
+    runs-on: ubuntu-latest
+    needs: tests
+    container:
+      image: liamcollearchivist/grindme:epitech-latest
+      options: --ulimit nofile=1024:1024
+    steps:
+      - name: "[GITHUB] Checkout code from GitHub"
+        uses: actions/checkout@v4
+
+      - name: "[BUILD] Compile project"
+        run: make
+
+      - name: "[GRINDME] Execute valgrind tests"
+        run: grindme --github-action
+
+      - name: "[CLEAN] Teardown"
         run: make fclean

@@ -1,0 +1,16 @@
+{
+  "suites": [
+    {
+      "name": "BINARY_NAME",
+      "tests": [
+        {
+          "name": "Default run",
+          "description": "Check if program runs without errors",
+          "executable": "./BINARY_NAME",
+          "args": [],
+          "input_file": null
+        }
+      ]
+    }
+  ]
+}
