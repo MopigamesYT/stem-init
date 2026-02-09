@@ -37,6 +37,7 @@ out/
 *.x86_64
 *.hex
 unit_tests
+BINARY_NAME
 
 # Debug files
 *.dSYM/
