@@ -6,7 +6,7 @@
 ##
 
 NAME = BINARY_NAME
-SRC = main.c
+SRC = src/main.c
 
 CC = clang
 CFLAGS = -g3
@@ -20,7 +20,7 @@ MAGENTA = \033[1;35m
 BOLD = \033[1m
 RESET = \033[0m
 
-OBJ = $(addprefix out/, $(SRC:.c=.o))
+OBJ = $(addprefix out/, $(notdir $(SRC:.c=.o)))
 
 TEST_SRC = $(wildcard tests/*.c)
 TEST_OBJ = $(addprefix out/, $(notdir $(TEST_SRC:.c=.o)))
@@ -33,7 +33,7 @@ all: $(OBJ)
 out:
 	@mkdir -p out
 
-out/%.o: %.c | out
+out/%.o: src/%.c | out
 	@$(CC) $(CFLAGS) -c -o $@ $<
 	@printf "  $(GREEN)󰆍 $(RESET) %s\n" $<
 

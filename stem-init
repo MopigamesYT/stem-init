@@ -2,8 +2,17 @@
 
 set -e
 
+STEM_VERSION=1
+BASE_TEMPLATE_DIR="${XDG_CONFIG_HOME}/stem-init"
+PROPERTIES_FILE=".stem-properties"
+DEFAULT_IGNORE="src/
+include/
+tests/"
+
 # Parse arguments
 FORCE=false
+UPDATE=false
+LANGUAGE=""
 POSITIONAL=()
 for arg in "$@"; do
   case "$arg" in
@@ -13,8 +22,15 @@ for arg in "$@"; do
       echo "Usage: stem-init [options] [project_name]"
       echo
       echo "Options:"
-      echo "  -h, --help    Show this help message"
-      echo "  -f, --force   Override non-empty directory check"
+      echo "  -h, --help          Show this help message"
+      echo "  -f, --force         Override non-empty directory check"
+      echo "  -u, --update        Update infrastructure files from templates"
+      echo "  -l, --language LNG  Set project language (default: c)"
+      echo
+      echo "Available languages:"
+      for lang_dir in "$BASE_TEMPLATE_DIR"/*/; do
+        [ -d "$lang_dir" ] && echo "  $(basename "$lang_dir")"
+      done
       echo
       echo "If no project_name is given, the current directory name is used."
       exit 0
@@ -22,11 +38,230 @@ for arg in "$@"; do
     -f|--force)
       FORCE=true
       ;;
+    -u|--update)
+      UPDATE=true
+      ;;
+    -l|--language)
+      LANG_NEXT=true
+      ;;
     *)
-      POSITIONAL+=("$arg")
+      if [ "$LANG_NEXT" = true ]; then
+        LANGUAGE="$arg"
+        LANG_NEXT=false
+      else
+        POSITIONAL+=("$arg")
+      fi
       ;;
   esac
 done
+
+# --- Helper: list template files (relative paths) ---
+template_files() {
+  find "$TEMPLATE_DIR" -type f -not -path '*/.git/*' \
+    | sed "s|^${TEMPLATE_DIR}/||" | sort
+}
+
+# --- Helper: apply placeholder replacements to a directory ---
+apply_placeholders() {
+  local dir="$1"
+  local current_year
+  current_year=$(date +%Y)
+
+  grep -rl --binary-files=without-match "CURRENT_YEAR" "$dir" 2>/dev/null \
+    | xargs -r sed -i "s/CURRENT_YEAR/${current_year}/g"
+
+  grep -rl --binary-files=without-match "PROJECT_NAME" "$dir" 2>/dev/null \
+    | xargs -r sed -i "s/PROJECT_NAME/${ESCAPED_NAME}/g"
+
+  grep -rl --binary-files=without-match "BINARY_NAME" "$dir" 2>/dev/null \
+    | xargs -r sed -i "s/BINARY_NAME/${ESCAPED_BINARY}/g"
+}
+
+# --- Helper: compute md5 checksum of a file ---
+file_checksum() {
+  md5sum "$1" | cut -d' ' -f1
+}
+
+# --- Helper: check if a file matches any ignore pattern ---
+is_ignored() {
+  local file="$1"
+  local patterns="$2"
+  while IFS= read -r pattern; do
+    [ -z "$pattern" ] && continue
+    # Directory pattern (trailing /)
+    if [[ "$pattern" == */ ]]; then
+      [[ "$file" == "${pattern}"* ]] && return 0
+    else
+      # Exact match or fnmatch-style glob
+      [[ "$file" == $pattern ]] && return 0
+    fi
+  done <<< "$patterns"
+  return 1
+}
+
+# --- Helper: read ignore patterns from .stem-properties ---
+read_ignore() {
+  sed -n '/^\[ignore\]$/,/^\[/{ /^\[/d; p; }' "$PROPERTIES_FILE"
+}
+
+# --- Helper: write .stem-properties ---
+write_properties() {
+  local ignore="${1:-$DEFAULT_IGNORE}"
+  {
+    echo "project_name=${PROJECT_NAME}"
+    echo "binary_name=${BINARY_NAME}"
+    echo "language=${LANGUAGE}"
+    echo "stem_version=${STEM_VERSION}"
+    echo "[ignore]"
+    echo "$ignore"
+    echo "[checksums]"
+    for file in $(template_files); do
+      if [ -f "$file" ]; then
+        echo "${file}=$(file_checksum "$file")"
+      fi
+    done
+  } > "$PROPERTIES_FILE"
+}
+
+# --- Helper: read a property from .stem-properties ---
+read_property() {
+  local key="$1"
+  sed -n "s/^${key}=//p" "$PROPERTIES_FILE" | head -1
+}
+
+# --- Helper: read stored checksum for a file ---
+read_checksum() {
+  local file="$1"
+  local escaped
+  escaped=$(printf '%s' "$file" | sed 's/[.[\\/^$*+?(){}|]/\\&/g')
+  sed -n "s/^${escaped}=//p" "$PROPERTIES_FILE" | head -1
+}
+
+# --- Helper: validate and set TEMPLATE_DIR for chosen language ---
+set_template_dir() {
+  TEMPLATE_DIR="${BASE_TEMPLATE_DIR}/${LANGUAGE}"
+  if [ ! -d "$TEMPLATE_DIR" ]; then
+    echo "󰅙 Error: unknown language '${LANGUAGE}'"
+    echo "       Available languages:"
+    for lang_dir in "$BASE_TEMPLATE_DIR"/*/; do
+      [ -d "$lang_dir" ] && echo "         $(basename "$lang_dir")"
+    done
+    exit 1
+  fi
+}
+
+# =============================================================
+# UPDATE MODE
+# =============================================================
+if [ "$UPDATE" = true ]; then
+  if [ ! -f "$PROPERTIES_FILE" ]; then
+    echo "󰅙 Error: ${PROPERTIES_FILE} not found"
+    echo "       This directory is not a stem project."
+    echo "       Run stem-init first to initialize."
+    exit 1
+  fi
+
+  PROJECT_NAME=$(read_property "project_name")
+  BINARY_NAME=$(read_property "binary_name")
+  LANGUAGE=$(read_property "language")
+  ESCAPED_NAME=$(printf '%s\n' "$PROJECT_NAME" | sed 's/[\/&]/\\&/g')
+  ESCAPED_BINARY=$(printf '%s\n' "$BINARY_NAME" | sed 's/[\/&]/\\&/g')
+
+  set_template_dir
+
+  echo "󰐗 Updating project: $PROJECT_NAME (binary: $BINARY_NAME, language: $LANGUAGE)"
+
+  # Read ignore patterns from .stem-properties
+  IGNORE_PATTERNS=$(read_ignore)
+
+  # Prepare templates in a temp directory
+  TMPDIR=$(mktemp -d)
+  trap 'rm -rf "$TMPDIR"' EXIT
+  rsync -a --exclude='/.git' --quiet "$TEMPLATE_DIR/" "$TMPDIR/"
+  apply_placeholders "$TMPDIR"
+
+  # Build new checksums in a temp file (preserving stored for skipped files)
+  NEW_PROPS=$(mktemp)
+  updated=0
+  skipped=0
+
+  for file in $(template_files); do
+    # Skip files matching ignore patterns
+    if is_ignored "$file" "$IGNORE_PATTERNS"; then
+      stored_checksum=$(read_checksum "$file")
+      if [ -n "$stored_checksum" ]; then
+        echo "${file}=${stored_checksum}" >> "$NEW_PROPS"
+      fi
+      continue
+    fi
+
+    new_checksum=$(file_checksum "$TMPDIR/$file")
+    stored_checksum=$(read_checksum "$file")
+
+    if [ ! -f "$file" ]; then
+      # File doesn't exist locally → copy it in
+      mkdir -p "$(dirname "$file")"
+      cp "$TMPDIR/$file" "$file"
+      echo "${file}=${new_checksum}" >> "$NEW_PROPS"
+      updated=$((updated + 1))
+      echo "  + $file (new)"
+    elif [ "$(file_checksum "$file")" = "$stored_checksum" ]; then
+      # User didn't modify it → safe to replace
+      if [ "$new_checksum" = "$stored_checksum" ]; then
+        # Template hasn't changed either → nothing to do
+        echo "${file}=${new_checksum}" >> "$NEW_PROPS"
+        continue
+      fi
+      cp "$TMPDIR/$file" "$file"
+      echo "${file}=${new_checksum}" >> "$NEW_PROPS"
+      updated=$((updated + 1))
+      echo "  ~ $file (updated)"
+    else
+      # User modified the file
+      if [ "$new_checksum" = "$stored_checksum" ]; then
+        # Template hasn't changed → keep user's version, keep stored checksum
+        echo "${file}=${stored_checksum}" >> "$NEW_PROPS"
+        continue
+      fi
+      printf "  ? %s was modified. Overwrite? [y/N] " "$file"
+      read -r answer
+      if [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
+        cp "$TMPDIR/$file" "$file"
+        echo "${file}=${new_checksum}" >> "$NEW_PROPS"
+        updated=$((updated + 1))
+        echo "    → overwritten"
+      else
+        # Keep stored checksum so we detect the conflict again next time
+        echo "${file}=${stored_checksum}" >> "$NEW_PROPS"
+        skipped=$((skipped + 1))
+        echo "    → skipped"
+      fi
+    fi
+  done
+
+  if [ "$updated" -eq 0 ] && [ "$skipped" -eq 0 ]; then
+    echo "󰄬 Already up to date."
+  else
+    # Rewrite .stem-properties with collected checksums (preserve ignore)
+    {
+      echo "project_name=${PROJECT_NAME}"
+      echo "binary_name=${BINARY_NAME}"
+      echo "language=${LANGUAGE}"
+      echo "stem_version=${STEM_VERSION}"
+      echo "[ignore]"
+      echo "$IGNORE_PATTERNS"
+      echo "[checksums]"
+      cat "$NEW_PROPS"
+    } > "$PROPERTIES_FILE"
+    echo "󰄬 Update complete ($updated updated, $skipped skipped)"
+  fi
+  rm -f "$NEW_PROPS"
+  exit 0
+fi
+
+# =============================================================
+# NORMAL INIT MODE
+# =============================================================
 
 # Fail if directory is not empty (excluding .git)
 if [ "$FORCE" = false ] && find . -mindepth 1 -maxdepth 1 ! -name '.git' | read -r _; then
@@ -35,6 +270,12 @@ if [ "$FORCE" = false ] && find . -mindepth 1 -maxdepth 1 ! -name '.git' | read 
   echo "       Use --force to override."
   exit 1
 fi
+
+# Language (default: c)
+if [ -z "$LANGUAGE" ]; then
+  LANGUAGE="c"
+fi
+set_template_dir
 
 # Project name
 if [ -n "${POSITIONAL[0]}" ]; then
@@ -64,22 +305,16 @@ fi
 ESCAPED_NAME=$(printf '%s\n' "$PROJECT_NAME" | sed 's/[\/&]/\\&/g')
 ESCAPED_BINARY=$(printf '%s\n' "$BINARY_NAME" | sed 's/[\/&]/\\&/g')
 
-echo "󰐗 Initializing project: $PROJECT_NAME (binary: $BINARY_NAME)"
+echo "󰐗 Initializing project: $PROJECT_NAME (binary: $BINARY_NAME, language: $LANGUAGE)"
 
 # Copy template quietly
-rsync -a --exclude='/.git' --quiet "$XDG_CONFIG_HOME/stem-init/" ./
+rsync -a --exclude='/.git' --quiet "$TEMPLATE_DIR/" ./
 
 # Replace placeholders
-CURRENT_YEAR=$(date +%Y)
+apply_placeholders "."
 
-grep -rl --binary-files=without-match "CURRENT_YEAR" . \
-  | xargs sed -i "s/CURRENT_YEAR/${CURRENT_YEAR}/g"
-
-grep -rl --binary-files=without-match "PROJECT_NAME" . \
-  | xargs sed -i "s/PROJECT_NAME/${ESCAPED_NAME}/g"
-
-grep -rl --binary-files=without-match "BINARY_NAME" . \
-  | xargs sed -i "s/BINARY_NAME/${ESCAPED_BINARY}/g"
+# Generate .stem-properties
+write_properties
 
 echo "󰄬 Template applied successfully"
 
